@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Strip modes on JavaScript</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 100vw;
+      height: 100vh;
+      margin: 0;
+      padding: 0;
+    }
+
+    .content {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .cur-mode {
+      margin: 10px 20px;
+      display: flex;
+      align-items: center;
+    }
+
+    .cur-mode .mode-title {
+      margin: 10px;
+      width: 200px;
+    }
+
+    .settings {
+      margin: 10px 20px;
+    }
+
+    .settings .setting-field {
+      margin-bottom: 10px;
+    }
+
+    canvas {
+      width: 100%;
+      height: 30%;
+      border: 1px solid #000;
+      background: #000;
+    }
+
+  </style>
+</head>
+<body>
+
+  <div class="content">
+    
+    <div class="mode-container">
+      
+      <div class="cur-mode">
+        <button class="prev-mode"><</button>
+        <h1 class="mode-title">Current mode</h1>
+        <button class="next-mode">></button>
+      </div>
+
+      <div class="settings">
+
+        <h2>Settings</h2>
+        
+        <div class="settings-container">
+          
+
+        </div>
+      </div>
+    </div>
+
+    <canvas></canvas>
+
+  </div>
+  
+  <script>
+
+    function randomBySeed(x, seed) {
+      x = (x << 49) | (x >>> 32) | (x << 125)
+      seed = (seed << 49) | (seed >>> 32) | (seed << 125)
+
+      return Math.cos(x ^ seed)
+    }
+
+    const cnvs = document.querySelector('canvas'),
+          ctx = cnvs.getContext('2d')
+
+    cnvs.width = parseInt(getComputedStyle(cnvs).width)
+    cnvs.height = parseInt(getComputedStyle(cnvs).height)
+
+    // STRIP MODES
+    
+    // const LED_AM = 292,
+    const LED_AM = 100,
+          leds = []
+
+    for(let i = 0; i < LED_AM; i++) leds[i] = [0, 0, 0];
+
+    const pixelSize = cnvs.width / LED_AM,
+          pixelPadding = 3
+
+    function constrain(value, min, max) {
+      if(value < min) return min
+      else if(value > max) return max
+      return value
+    }
+
+    function HSVColor(hue, saturation, value) {
+      hue = hue % 255
+      saturation = constrain(saturation, 0, 255)
+      value = constrain(value, 0, 255)
+
+      hue = hue / 255 * 360
+      saturation = saturation / 255
+      value = value / 255
+
+      const level = value - value * saturation / 2,
+            min = Math.min(level, 1 - level)
+
+      return [Math.round(hue), min ? Math.round((value - level) / min * 100) : 0, Math.round(level * 100)]
+    }
+
+    function getHSVColor([hue, saturation, level]) {
+      level /= 100
+      saturation /= 100
+
+      const value = saturation * Math.min(level, 1 - level) + level
+
+      return [Math.round(hue / 360 * 255), value ? Math.round((2 - 2 * level / value) * 255) : 0, Math.round(value * 255)]
+    }
+
+    function clearStrip() {
+      for(let i = 0; i < LED_AM; i++) leds[i] = [0, 0, 0]
+      showStrip()
+    }
+
+    function showStrip() {
+      for(let i = 0; i < LED_AM; i++) {
+        const [hue, saturation, level] = leds[i]
+        ctx.fillStyle = `hsl(${hue}, ${saturation}%, ${level}%)`
+        ctx.fillRect(pixelSize * i + pixelPadding, cnvs.height / 2 - pixelSize / 2 + pixelPadding, pixelSize - pixelPadding, pixelSize - pixelPadding)
+      }
+    }
+
+    // MODES
+
+    function Mode(title, settings, func) {
+      this.title = title
+      this.settings = settings
+      this.func = func
+    }
+
+    function setSymetric(isSymetric, func) {
+      const half = LED_AM / 2
+
+      if(isSymetric === 0) for(let i = 0; i < LED_AM; i++) func(i, i, half, LED_AM)
+      else if(isSymetric === 1) {  
+
+        for(let i = half - 1; i >= 0; i--) func(half - 1 - i, i, half, LED_AM)
+        for(let i = half; i < LED_AM; i++) func(i - half, i, half, LED_AM)
+      }
+    }
+
+    const modes = []
+
+    modes.push(new Mode('ZeroMode', {}, function() {
+      for(let i = 0; i < LED_AM; i++) leds[i] = HSVColor(0, 0, 0)
+    }))
+
+    modes.push(new Mode('Rainbow', {
+      shiftSpeed: 1.5,
+      direction: 1,
+      isSymetrical: 1,
+      colorStep: 255 / LED_AM,
+      _shift: 0
+    }, function() {
+
+      setSymetric(+this.settings.isSymetrical, (i, absi) => {
+        leds[absi] = HSVColor(this.settings.colorStep * i + this.settings._shift * this.settings.direction, 255, 255)
+      })
+
+      this.settings._shift += +this.settings.shiftSpeed
+    }))
+
+    modes.push(new Mode('Fill Color', {
+      color: 0
+    }, function() {
+      for(let i = 0; i < LED_AM; i++) leds[i] = HSVColor(this.settings.color, 255, 255)
+    }))
+
+    function lerp(num, endpoint, pow) {
+      return Math.round(num**pow / endpoint**(pow-1))
+    }
+
+    function lerpSmooth(a, b, t) {
+      // return (b - a) * ((t * (t * 6.0 - 15.0) + 10.0) * t * t * t) + a;
+      return (b - a) * t + a;
+    }
+
+    modes.push(new Mode('Noisy Fire', {
+      isSymetrical: 0,
+      color: 24,
+      colorRange: 10,
+      brightnessRange: 20,
+      fadeSpeed: 1.2,
+      width: .99,
+      frequency: 0
+    }, function() {
+
+      const isSpawnPoint = Math.round(Math.random() * this.settings.frequency) === 0
+
+      if(isSpawnPoint) {
+        const ledNum = Math.round(Math.random() * LED_AM),
+              color = +this.settings.color + Math.round(Math.random() * this.settings.colorRange * 2 - this.settings.colorRange),
+              brightness = 255 - Math.round(Math.random() * this.settings.brightnessRange)
+
+        leds[ledNum] = HSVColor(color, brightness, 255)
+      }
+
+      const saturations = [],
+            hues = []
+      for(let i = 0; i < LED_AM; i++) {
+        const color = getHSVColor(leds[i])
+        hues[i] = color[0]
+        saturations[i] = color[1]
+      }
+
+      setSymetric(this.settings.isSymetrical, (i, absi) => {
+
+        const led_satur = saturations[absi],
+              led_l_satur = saturations[absi-1] !== undefined ? saturations[absi-1] : led_satur,
+              led_r_satur = saturations[absi+1] !== undefined ? saturations[absi+1] : led_satur,
+              led_hue = hues[absi],
+              led_l_hue = hues[absi-1] !== undefined ? hues[absi-1] : led_hue,
+              led_r_hue = hues[absi+1] !== undefined ? hues[absi+1] : led_hue
+
+        const newHue = (led_hue + led_l_hue + led_r_hue) / 3
+        let newSatur = Math.max(led_satur, led_l_satur, led_r_satur) * this.settings.width
+        newSatur = lerp(newSatur, 255, this.settings.fadeSpeed)
+
+        leds[absi] = HSVColor(newHue, newSatur, 255)
+      })
+    }))
+
+    function recursiveCos(x, params) {
+      let point = 0,
+          totalAmplitude = 0      
+
+      for(let i = 0; i < params.length; i++) {
+        const [xAdd, xMult, funcAdd, funcMult] = params[i]
+        point += Math.cos(x * xMult + xAdd) * funcMult + funcAdd
+        totalAmplitude += funcMult
+      }
+
+      return point / totalAmplitude
+    }
+
+    modes.push(new Mode('Sinused Color', {
+      isSymetrical: 0,
+      invertColors: 1,
+      color: 24,
+      width: LED_AM,
+      height: 500,
+      heightOffset: -200,
+      animationSpeed: .05,
+      cosNum: 7,
+      cosMaxFreq: 64,
+      _shift: 0,
+      _shiftPoint: 0,
+      _shiftStep: 10,
+      _coss: [],
+      _dirs: []
+    }, function() {
+
+      if(this.settings._shift >= this.settings._shiftPoint) {
+
+        if(this.settings._coss.length === +this.settings.cosNum) {
+          this.settings._coss.forEach((arr, i) => {
+            this.settings._dirs[i][0] = this.settings._dirs[i][1]
+            arr[0] = this.settings._dirs[i][0]
+
+            this.settings._dirs[i][1] = Math.random() * this.settings.width / 10
+          })
+        }
+        else {
+          this.settings._coss = []
+          this.settings._dirs = []
+
+          for(let i = 0; i < +this.settings.cosNum; i++) {
+            this.settings._coss[i] = [
+              0, Math.random() * this.settings.cosMaxFreq,
+              0, Math.random()
+            ]
+
+            this.settings._dirs[i] = [0, Math.random() * this.settings.width / 10]
+          }
+        }
+
+        this.settings._shiftPoint = this.settings._shift + +this.settings._shiftStep
+      }
+
+      const t = (this.settings._shiftStep - (this.settings._shiftPoint - this.settings._shift)) / this.settings._shiftStep
+
+      this.settings._coss.forEach((arr, i) => {
+        this.settings._coss[i][0] = lerpSmooth(this.settings._dirs[i][0], this.settings._dirs[i][1], t)
+      })
+
+      ctx.clearRect(0, 0, cnvs.width, cnvs.height)
+      ctx.fillStyle = 'rgba(255, 255, 255, .5)'
+
+      setSymetric(+this.settings.isSymetrical, (i, absi) => {
+        let val = (recursiveCos(i / this.settings.width, this.settings._coss) + 1) * (this.settings.height / 2)
+            val += +this.settings.heightOffset
+        if(+this.settings.invertColors) val = 255 - val
+
+        leds[absi] = HSVColor(this.settings.color, val, 255)
+        ctx.fillRect(absi * pixelSize, val / 255 * cnvs.height, pixelSize, 1)
+      })
+
+      this.settings._shift += +this.settings.animationSpeed
+    }))
+
+    modes.push(new Mode('Waves Field', {
+      isSymetrical: 0,
+      invertColors: 1,
+      color: 24,
+      airResistence: .1,
+      mass: 50,
+      animationSpeed: 5,
+      eventFrequency: 0,
+      eventTimeMS: 2000,
+      _field: undefined,
+      _clock: 0,
+      _pixelEventIndex: null
+    }, function() {
+
+      if(this.settings._field === undefined) {
+        this.settings._field = []
+        for(let i = 0; i < LED_AM; i++) this.settings._field[i] = {pos: 127, force: 0}
+      }
+
+      if(Math.round(Math.random() * this.settings.eventFrequency) === 0 && this.settings._pixelEventIndex === null) {
+        this.settings._pixelEventIndex = Math.round(Math.random() * (LED_AM-1))
+        this.settings._clock = +new Date() + +this.settings.eventTimeMS
+      }
+
+      if(this.settings._pixelEventIndex !== null && +new Date() < this.settings._clock) {
+        const t = (this.settings._clock - new Date()) / this.settings.eventTimeMS
+
+        this.settings._field[this.settings._pixelEventIndex].pos = Math.cos(t * Math.PI + Math.PI/2) * 255 + 127
+        this.settings._field[this.settings._pixelEventIndex].force = 0 
+      }
+      else this.settings._pixelEventIndex = null
+
+      for(let k = 0; k < +this.settings.animationSpeed; k++) {
+        for(let i = 1; i < LED_AM-1; i++) {
+
+          const p = this.settings._field[i],
+                pl = this.settings._field[i-1] !== undefined ? this.settings._field[i-1] : p,
+                pr = this.settings._field[i+1] !== undefined ? this.settings._field[i+1] : p
+
+          p.force -= p.force * this.settings.airResistence / this.settings.mass
+          p.force += ((pl.pos + pr.pos) / 2  - p.pos) / this.settings.mass
+        }
+
+        for(let i = 0; i < LED_AM; i++) {
+          const p = this.settings._field[i]
+          p.pos += p.force
+        }
+      }
+
+      ctx.clearRect(0, 0, cnvs.width, cnvs.height)
+      ctx.fillStyle = 'rgba(255, 255, 255, .9)'
+
+      for(let i = 0; i < LED_AM; i++) {
+        const value = this.settings._field[i].pos
+
+        ctx.fillRect(i * pixelSize, cnvs.height - value, pixelSize, 1)
+        leds[i] = HSVColor(+this.settings.color, +this.settings.invertColors ? 255 - value : value, 255)
+      }
+      
+      // setSymetric(+this.settings.isSymetrical, (i, absi) => {
+        
+      // })
+    }))
+
+    // SETTINGS DISPLAY
+
+    const nodes = {
+      prevArrow: document.querySelector('.prev-mode'),
+      modeTitle: document.querySelector('.mode-title'),
+      nextArrow: document.querySelector('.next-mode'),
+      settingsContainer: document.querySelector('.settings-container')
+    }
+
+    let mode = 0
+
+    function setMode(index) {
+      if(modes[index] === undefined) index = 0
+
+      mode = index
+      nodes.modeTitle.innerText = modes[index].title
+
+      nodes.settingsContainer.innerHTML = ''
+
+      publicSettings = Object.keys(modes[index].settings).filter(key => !key.match(/^_/))
+
+      publicSettings.forEach(setting => {
+        const settingId = setting + '-' + Math.round(Math.random() * new Date())
+
+        nodes.settingsContainer.insertAdjacentHTML('beforeend', `
+          <div class="setting-field" data-field-id="${settingId}">
+            <label for="${settingId}">${setting}</label>
+            <input id="${settingId}" value="${modes[index].settings[setting]}">
+          </div>
+        `)
+
+        nodes.settingsContainer.querySelector('#' + settingId).addEventListener('change', (e) => {
+          modes[index].settings[setting] = e.srcElement.value
+        })
+      })
+
+      sessionStorage['strip-mode'] = mode
+    }
+
+    nodes.prevArrow.addEventListener('click', () => {
+      if(mode > 0) mode--
+      setMode(mode)
+    })
+
+    nodes.nextArrow.addEventListener('click', () => {
+      if(mode < modes.length - 1) mode++
+      setMode(mode)
+    })
+
+    if(sessionStorage['strip-mode'] !== undefined) mode = +sessionStorage['strip-mode']
+    setMode(mode)
+
+    // LOOP
+
+    const loop = setInterval(() => {
+
+      modes[mode].func()
+      showStrip()
+    }, 1000 / 60)
+
+  </script>
+</body>
+</html>
